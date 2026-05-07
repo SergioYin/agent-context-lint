@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-context-lint"
+version = "0.1.0"
+description = "Lint AI coding-agent context files for actionability, size, and secret leaks."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Hermes Agent"}]
+keywords = ["ai", "agents", "codex", "claude", "cursor", "copilot", "context-engineering"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Environment :: Console",
+]
+
+[project.scripts]
+agent-context-lint = "agent_context_lint.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/SergioYin/agent-context-lint"
+Repository = "https://github.com/SergioYin/agent-context-lint"
+Issues = "https://github.com/SergioYin/agent-context-lint/issues"
