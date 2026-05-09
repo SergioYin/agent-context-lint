@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.2 - 2026-05
+
+- Added `agent-context-lint fix [path]` for conservative instruction-file hygiene autofixes.
+- Added `fix --dry-run` to preview which scanned agent instruction files would change without writing.
+- Added `fix --add-verification` to optionally append a minimal Verification section when one is missing.
+
 ## v0.2.1 - 2026-05
 
 - Added `agent-context-lint init [path]` to create a concise starter `AGENTS.md`.

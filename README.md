@@ -29,6 +29,7 @@ AI coding tools increasingly depend on repository-level instruction/context file
   - TODO/TBD placeholders
   - untracked context files in git repos
 - Creates a concise starter `AGENTS.md` for repositories that do not have one yet.
+- Safely previews or applies low-risk hygiene fixes for scanned instruction files.
 - Outputs Markdown by default, JSON for automation.
 - No runtime dependencies beyond Python 3.10+.
 
@@ -79,6 +80,20 @@ python -m agent_context_lint init . --dry-run
 ```
 
 The init command refuses to overwrite an existing `AGENTS.md` unless `--force` is provided.
+
+Preview safe hygiene fixes without writing:
+
+```bash
+python -m agent_context_lint fix . --dry-run
+```
+
+Apply safe hygiene fixes to scanned agent instruction files:
+
+```bash
+python -m agent_context_lint fix .
+```
+
+The fix command trims trailing whitespace, collapses excessive blank lines, and removes standalone placeholder-only lines such as `TODO`, `TBD`, and `replace me`. It only considers the same known agent instruction files scanned by the linter, plus any files matched with `--pattern`. To append a minimal Verification section when one is missing, pass `--add-verification`.
 
 ## Example
 

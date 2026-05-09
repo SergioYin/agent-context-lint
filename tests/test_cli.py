@@ -106,3 +106,47 @@ def test_init_skeleton_lints_cleanly(tmp_path: Path, capsys):
     unacceptable = [issue for issue in data["issues"] if issue["severity"] in {"error", "warn"}]
     assert code == 0
     assert unacceptable == []
+
+
+def test_fix_dry_run_reports_without_writing(tmp_path: Path, capsys):
+    agents = tmp_path / "AGENTS.md"
+    original = "# Build  \n\n\n\nTODO\nRun `pytest`.\n"
+    agents.write_text(original, encoding="utf-8")
+
+    code = main(["fix", str(tmp_path), "--dry-run"])
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert "Would change: AGENTS.md" in out
+    assert "Would change 1 file(s)." in out
+    assert agents.read_text(encoding="utf-8") == original
+
+
+def test_fix_writes_safe_hygiene_changes(tmp_path: Path, capsys):
+    agents = tmp_path / "AGENTS.md"
+    agents.write_text("# Build  \n\n\n\nTBD\nRun `pytest`.  \n", encoding="utf-8")
+
+    code = main(["fix", str(tmp_path), "--add-verification"])
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert "Changed: AGENTS.md" in out
+    assert agents.read_text(encoding="utf-8") == (
+        "# Build\n\n\nRun `pytest`.\n\n"
+        "## Verification\n\n"
+        "- Run the repository's documented checks after changes.\n"
+    )
+
+
+def test_fix_does_not_touch_unrelated_files(tmp_path: Path, capsys):
+    agents = tmp_path / "AGENTS.md"
+    readme = tmp_path / "README.md"
+    agents.write_text("# Build  \nRun `pytest`.  \n", encoding="utf-8")
+    readme.write_text("# Project  \n\n\n\nTODO\n", encoding="utf-8")
+
+    code = main(["fix", str(tmp_path)])
+    capsys.readouterr()
+
+    assert code == 0
+    assert agents.read_text(encoding="utf-8") == "# Build\nRun `pytest`.\n"
+    assert readme.read_text(encoding="utf-8") == "# Project  \n\n\n\nTODO\n"

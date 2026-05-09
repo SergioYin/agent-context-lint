@@ -61,6 +61,8 @@ SECRET_PATTERNS = [
 
 ACTION_HEADINGS = re.compile(r"^#{1,3}\s*(build|test|lint|run|commands?|workflow|constraints?|style|do not|must|verification|release)", re.I | re.M)
 COMMAND_HINT = re.compile(r"`{1,3}\s*(npm|pnpm|yarn|python|pytest|uv|pip|go test|cargo|make|docker|gh|git)\b", re.I)
+VERIFICATION_HEADING = re.compile(r"^#{1,6}\s*(handoff\s*/\s*)?verification\b", re.I | re.M)
+PLACEHOLDER_ONLY = re.compile(r"^(?:[-*+]\s*)?(?:TODO|TBD|FIXME|replace me)\.?:?$", re.I)
 
 @dataclass
 class Finding:
@@ -248,6 +250,49 @@ def init_agents_file(target: Path, force: bool, dry_run: bool) -> int:
     return 0
 
 
+def autofix_text(text: str, add_verification: bool) -> str:
+    lines = text.splitlines()
+    fixed_lines: list[str] = []
+    blank_count = 0
+
+    for line in lines:
+        cleaned = line.rstrip()
+        if PLACEHOLDER_ONLY.fullmatch(cleaned.strip()):
+            continue
+        if cleaned == "":
+            blank_count += 1
+            if blank_count > 2:
+                continue
+        else:
+            blank_count = 0
+        fixed_lines.append(cleaned)
+
+    fixed = "\n".join(fixed_lines).rstrip() + "\n"
+    if add_verification and fixed.strip() and not VERIFICATION_HEADING.search(fixed):
+        fixed = fixed.rstrip() + "\n\n## Verification\n\n- Run the repository's documented checks after changes.\n"
+    return fixed
+
+
+def fix_files(root: Path, patterns: Iterable[str], dry_run: bool, add_verification: bool) -> int:
+    files = discover(root, patterns)
+    changed: list[str] = []
+
+    for path in files:
+        original = path.read_text(encoding="utf-8", errors="replace")
+        fixed = autofix_text(original, add_verification)
+        if fixed == original:
+            continue
+        changed.append(path.relative_to(root).as_posix())
+        if not dry_run:
+            path.write_text(fixed, encoding="utf-8")
+
+    action = "Would change" if dry_run else "Changed"
+    for rel in changed:
+        print(f"{action}: {rel}")
+    print(f"{action} {len(changed)} file(s).")
+    return 0
+
+
 def init_main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Create a minimal AGENTS.md skeleton.")
     parser.add_argument("path", nargs="?", default=".", help="Directory where AGENTS.md should be created")
@@ -257,14 +302,32 @@ def init_main(argv: list[str]) -> int:
     return init_agents_file(Path(args.path), args.force, args.dry_run)
 
 
+def fix_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Safely autofix low-risk agent instruction hygiene issues.")
+    parser.add_argument("path", nargs="?", default=".", help="Repository/project path to fix")
+    parser.add_argument("--dry-run", action="store_true", help="Preview changed files without writing")
+    parser.add_argument("--pattern", action="append", help="Additional glob pattern to scan and fix")
+    parser.add_argument(
+        "--add-verification",
+        action="store_true",
+        help="Append a minimal Verification section when one is missing",
+    )
+    args = parser.parse_args(argv)
+    root = Path(args.path).resolve()
+    patterns = DEFAULT_FILES + (args.pattern or [])
+    return fix_files(root, patterns, args.dry_run, args.add_verification)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "init":
         return init_main(argv[1:])
+    if argv and argv[0] == "fix":
+        return fix_main(argv[1:])
 
     parser = argparse.ArgumentParser(
         description="Lint AI coding-agent context files for actionability, size, and secret leaks.",
-        epilog="Subcommands: init [path] [--dry-run] [--force]",
+        epilog="Subcommands: init [path] [--dry-run] [--force], fix [path] [--dry-run] [--add-verification]",
     )
     parser.add_argument("path", nargs="?", default=".", help="Repository/project path to scan")
     parser.add_argument("--format", choices=("text", "json"), default="text", help="Output format")
