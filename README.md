@@ -53,10 +53,10 @@ From a checkout:
 python -m agent_context_lint /path/to/repo
 ```
 
-JSON output:
+JSON output for CI/local automation:
 
 ```bash
-python -m agent_context_lint /path/to/repo --json
+python -m agent_context_lint /path/to/repo --format json
 ```
 
 Scan additional custom files:
@@ -91,6 +91,14 @@ The CLI exits non-zero only for `error` findings, such as likely secret leaks. W
 - name: Lint AI agent context
   run: python -m agent_context_lint .
 ```
+
+For machine-readable output:
+
+```bash
+python -m agent_context_lint . --format json
+```
+
+The JSON report includes `scanned_files`, per-file `issues`, a flattened top-level `issues` list, `summary` counts, and the `exit_code` the command returns. Each issue includes `severity`, `message`, `path`, and `line` when a source line is available. The older `--json` flag remains available as an alias for `--format json`.
 
 ## Project layout
 

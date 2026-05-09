@@ -4,7 +4,7 @@ import argparse
 import json
 import re
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -153,10 +153,58 @@ def render_markdown(scores: list[FileScore], root: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
+def issue_to_dict(finding: Finding) -> dict[str, object]:
+    issue: dict[str, object] = {
+        "severity": finding.level,
+        "code": finding.code,
+        "message": finding.message,
+        "path": finding.file,
+    }
+    if finding.line is not None:
+        issue["line"] = finding.line
+    return issue
+
+
+def json_report(scores: list[FileScore], root: Path, exit_code: int) -> dict[str, object]:
+    issues = [issue_to_dict(f) for s in scores for f in s.findings]
+    counts = {
+        "error": sum(1 for issue in issues if issue["severity"] == "error"),
+        "warn": sum(1 for issue in issues if issue["severity"] == "warn"),
+        "info": sum(1 for issue in issues if issue["severity"] == "info"),
+    }
+    files = [
+        {
+            "path": s.file,
+            "file": s.file,
+            "bytes": s.bytes,
+            "approx_tokens": s.approx_tokens,
+            "score": s.score,
+            "issues": [issue_to_dict(f) for f in s.findings],
+        }
+        for s in scores
+    ]
+    return {
+        "root": str(root),
+        "scanned_files": [s.file for s in scores],
+        "files": files,
+        "issues": issues,
+        "summary": {
+            "files_scanned": len(scores),
+            "issues": len(issues),
+            "error": counts["error"],
+            "warn": counts["warn"],
+            "info": counts["info"],
+            "average_score": round(sum(s.score for s in scores) / len(scores), 1) if scores else 0,
+        },
+        "exit_code": exit_code,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Lint AI coding-agent context files for actionability, size, and secret leaks.")
     parser.add_argument("path", nargs="?", default=".", help="Repository/project path to scan")
-    parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+    parser.add_argument("--format", choices=("text", "json"), default="text", help="Output format")
+    parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON (alias for --format json)")
     parser.add_argument("--max-bytes", type=int, default=32000, help="Warn when a context file exceeds this byte budget")
     parser.add_argument("--pattern", action="append", help="Additional glob pattern to scan")
     args = parser.parse_args(argv)
@@ -166,13 +214,15 @@ def main(argv: list[str] | None = None) -> int:
     files = discover(root, patterns)
     tracked = git_tracked(root)
     scores = [lint_file(p, root, tracked, args.max_bytes) for p in files]
+    exit_code = 1 if any(f.level == "error" for s in scores for f in s.findings) else 0
+    output_format = "json" if args.json else args.format
 
-    if args.json:
-        print(json.dumps({"root": str(root), "files": [asdict(s) for s in scores]}, indent=2))
+    if output_format == "json":
+        print(json.dumps(json_report(scores, root, exit_code), indent=2))
     else:
         print(render_markdown(scores, root))
 
-    return 1 if any(f.level == "error" for s in scores for f in s.findings) else 0
+    return exit_code
 
 if __name__ == "__main__":
     raise SystemExit(main())
