@@ -28,6 +28,7 @@ AI coding tools increasingly depend on repository-level instruction/context file
   - possible hard-coded secrets/tokens
   - TODO/TBD placeholders
   - untracked context files in git repos
+- Creates a concise starter `AGENTS.md` for repositories that do not have one yet.
 - Outputs Markdown by default, JSON for automation.
 - No runtime dependencies beyond Python 3.10+.
 
@@ -64,6 +65,20 @@ Scan additional custom files:
 ```bash
 python -m agent_context_lint . --pattern "docs/agent/*.md"
 ```
+
+Create a starter `AGENTS.md`:
+
+```bash
+python -m agent_context_lint init /path/to/repo
+```
+
+Preview the starter file without writing:
+
+```bash
+python -m agent_context_lint init . --dry-run
+```
+
+The init command refuses to overwrite an existing `AGENTS.md` unless `--force` is provided.
 
 ## Example
 
@@ -115,5 +130,4 @@ MIT
 
 - GitHub Action packaging for one-line CI adoption.
 - More ecosystem-specific command detection.
-- Optional autofix/init commands for common agent context files.
 - Richer examples from real-world Python, Node, and docs-only repositories.

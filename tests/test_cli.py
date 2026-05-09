@@ -58,3 +58,51 @@ def test_json_reports_error_exit_code_and_line(tmp_path: Path, capsys):
     assert secret_issues[0]["severity"] == "error"
     assert secret_issues[0]["path"] == "AGENTS.md"
     assert secret_issues[0]["line"] == 3
+
+
+def test_init_writes_agents_file(tmp_path: Path, capsys):
+    code = main(["init", str(tmp_path)])
+    out = capsys.readouterr().out
+    agents = tmp_path / "AGENTS.md"
+    assert code == 0
+    assert agents.exists()
+    assert "Created" in out
+    assert "## Commands" in agents.read_text(encoding="utf-8")
+
+
+def test_init_refuses_existing_agents_file(tmp_path: Path, capsys):
+    agents = tmp_path / "AGENTS.md"
+    agents.write_text("# Existing\n", encoding="utf-8")
+    code = main(["init", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "Refusing to overwrite" in out
+    assert agents.read_text(encoding="utf-8") == "# Existing\n"
+
+
+def test_init_force_overwrites_agents_file(tmp_path: Path, capsys):
+    agents = tmp_path / "AGENTS.md"
+    agents.write_text("# Existing\n", encoding="utf-8")
+    code = main(["init", str(tmp_path), "--force"])
+    capsys.readouterr()
+    assert code == 0
+    assert agents.read_text(encoding="utf-8").startswith("# Agent Instructions")
+
+
+def test_init_dry_run_prints_without_writing(tmp_path: Path, capsys):
+    code = main(["init", str(tmp_path), "--dry-run"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "# Agent Instructions" in out
+    assert "## Handoff / Verification" in out
+    assert not (tmp_path / "AGENTS.md").exists()
+
+
+def test_init_skeleton_lints_cleanly(tmp_path: Path, capsys):
+    assert main(["init", str(tmp_path)]) == 0
+    capsys.readouterr()
+    code = main([str(tmp_path), "--format", "json"])
+    data = json.loads(capsys.readouterr().out)
+    unacceptable = [issue for issue in data["issues"] if issue["severity"] in {"error", "warn"}]
+    assert code == 0
+    assert unacceptable == []

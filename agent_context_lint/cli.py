@@ -4,9 +4,43 @@ import argparse
 import json
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+
+AGENTS_SKELETON = """# Agent Instructions
+
+## Project Overview
+
+- Purpose: Describe what this repository builds and who it serves.
+- Main entry points: Note the primary packages, services, apps, or docs.
+- Architecture notes: Capture constraints an agent should preserve when editing.
+
+## Commands
+
+- Install: `python -m pip install -e .`
+- Test: `python -m pytest -q`
+- Lint: `python -m agent_context_lint .`
+
+## Coding Standards
+
+- Keep changes focused, deterministic, and covered by tests when behavior changes.
+- Prefer standard library and existing local patterns before adding new tools.
+- Keep examples copy-paste runnable and update docs with user-visible changes.
+
+## Boundaries / Safety
+
+- Do not commit secrets, private data, build outputs, caches, or virtualenvs.
+- Avoid unrelated refactors, formatting churn, and generated files unless requested.
+- Preserve public APIs and existing lint behavior unless the task explicitly changes them.
+
+## Handoff / Verification
+
+- Summarize changed files, behavior, and any compatibility notes.
+- Run the commands above or explain why a command could not be run.
+- Call out remaining risks, assumptions, and follow-up work.
+"""
 
 DEFAULT_FILES = [
     "AGENTS.md",
@@ -200,8 +234,38 @@ def json_report(scores: list[FileScore], root: Path, exit_code: int) -> dict[str
     }
 
 
+def init_agents_file(target: Path, force: bool, dry_run: bool) -> int:
+    path = target.resolve() / "AGENTS.md"
+    if dry_run:
+        print(AGENTS_SKELETON)
+        return 0
+    if path.exists() and not force:
+        print(f"Refusing to overwrite existing {path}. Use --force to replace it.")
+        return 1
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(AGENTS_SKELETON, encoding="utf-8")
+    print(f"Created {path}")
+    return 0
+
+
+def init_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Create a minimal AGENTS.md skeleton.")
+    parser.add_argument("path", nargs="?", default=".", help="Directory where AGENTS.md should be created")
+    parser.add_argument("--force", action="store_true", help="Overwrite an existing AGENTS.md")
+    parser.add_argument("--dry-run", action="store_true", help="Print the skeleton without writing a file")
+    args = parser.parse_args(argv)
+    return init_agents_file(Path(args.path), args.force, args.dry_run)
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Lint AI coding-agent context files for actionability, size, and secret leaks.")
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "init":
+        return init_main(argv[1:])
+
+    parser = argparse.ArgumentParser(
+        description="Lint AI coding-agent context files for actionability, size, and secret leaks.",
+        epilog="Subcommands: init [path] [--dry-run] [--force]",
+    )
     parser.add_argument("path", nargs="?", default=".", help="Repository/project path to scan")
     parser.add_argument("--format", choices=("text", "json"), default="text", help="Output format")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON (alias for --format json)")

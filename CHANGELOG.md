@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.1 - 2026-05
+
+- Added `agent-context-lint init [path]` to create a concise starter `AGENTS.md`.
+- Added `--dry-run` to preview the starter file and `--force` to overwrite an existing `AGENTS.md`.
+- Documented init examples in the README.
+
 ## v0.2.0 - 2026-05
 
 - Added `--format text|json` with text as the default output format.
