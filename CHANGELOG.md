@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.3 - 2026-05
+
+- Added `command_drift` warnings for likely validation commands in AI-agent instruction files that are not documented in README.md or supported by package metadata.
+- Recognize README examples, `package.json` scripts, `pyproject.toml` `[project.scripts]`, and local Python module/script targets as command support signals.
+- Added command-drift fixture coverage for README-supported, package-script-supported, and unsupported stale commands.
+- Added `scripts/selfcheck.py` for local unittest/pytest plus command-drift smoke validation.
+
 ## v0.2.2 - 2026-05
 
 - Added `agent-context-lint fix [path]` for conservative instruction-file hygiene autofixes.

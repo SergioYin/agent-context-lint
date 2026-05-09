@@ -1,4 +1,8 @@
 import json
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 
 from agent_context_lint.cli import main
@@ -7,6 +11,50 @@ from agent_context_lint.cli import main
 def write_secret_fixture(path: Path) -> None:
     fake_token = "ghp_" + "abcdefghijklmnopqrstuvwxyz" + "ABCDE"
     path.write_text(f"# Build\nRun `pytest`.\nTOKEN={fake_token}\n", encoding="utf-8")
+
+
+def run_json_scan(path: Path) -> tuple[int, dict[str, object]]:
+    output = StringIO()
+    with redirect_stdout(output):
+        code = main([str(path), "--format", "json"])
+    return code, json.loads(output.getvalue())
+
+
+class CommandDriftTests(unittest.TestCase):
+    def test_readme_supported_command_does_not_warn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "README.md").write_text("Run checks with `python -m pytest -q`.\n", encoding="utf-8")
+            (root / "AGENTS.md").write_text("# Test\nRun `python -m pytest -q`.\n", encoding="utf-8")
+
+            code, data = run_json_scan(root)
+
+            self.assertEqual(code, 0)
+            self.assertNotIn("command_drift", {issue["code"] for issue in data["issues"]})
+
+    def test_package_json_supported_command_does_not_warn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "package.json").write_text('{"scripts": {"lint": "eslint ."}}\n', encoding="utf-8")
+            (root / "AGENTS.md").write_text("# Lint\nRun `npm run lint`.\n", encoding="utf-8")
+
+            code, data = run_json_scan(root)
+
+            self.assertEqual(code, 0)
+            self.assertNotIn("command_drift", {issue["code"] for issue in data["issues"]})
+
+    def test_unsupported_stale_command_warns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "README.md").write_text("Run checks with `python -m pytest -q`.\n", encoding="utf-8")
+            (root / "AGENTS.md").write_text("# Lint\nRun `npm run lint` before handoff.\n", encoding="utf-8")
+
+            code, data = run_json_scan(root)
+            drift = [issue for issue in data["issues"] if issue["code"] == "command_drift"]
+
+            self.assertEqual(code, 0)
+            self.assertEqual(len(drift), 1)
+            self.assertIn("npm run lint", drift[0]["message"])
 
 
 def test_markdown_scan_warns_for_missing_commands(capsys):

@@ -25,6 +25,7 @@ AI coding tools increasingly depend on repository-level instruction/context file
   - missing actionable sections (Build, Test, Constraints, Verification, etc.)
   - missing concrete shell commands
   - files likely to exceed context byte budgets
+  - instruction-file validation commands that drift from README/package metadata
   - possible hard-coded secrets/tokens
   - TODO/TBD placeholders
   - untracked context files in git repos
@@ -95,6 +96,15 @@ python -m agent_context_lint fix .
 
 The fix command trims trailing whitespace, collapses excessive blank lines, and removes standalone placeholder-only lines such as `TODO`, `TBD`, and `replace me`. It only considers the same known agent instruction files scanned by the linter, plus any files matched with `--pattern`. To append a minimal Verification section when one is missing, pass `--add-verification`.
 
+Run the project test suite:
+
+```bash
+python -m pytest -q
+python scripts/selfcheck.py
+```
+
+Instruction files that mention likely validation commands such as test, lint, build, run, start, or serve commands are checked against `README.md` and common metadata scripts. Commands are treated as supported when they appear in README examples, match `package.json` scripts such as `npm run lint`, match `[project.scripts]` entries in `pyproject.toml`, or target known local Python modules/scripts.
+
 ## Example
 
 ```bash
@@ -110,6 +120,7 @@ Average score: **45.0/100**
 
 ### `AGENTS.md` — 45/100
 - ⚠️ `missing_commands`: No concrete shell commands detected...
+- ⚠️ `command_drift`: Command `npm run lint` is not documented in README.md...
 - ℹ️ `placeholder`: Placeholder language can reduce agent reliability.
 ```
 

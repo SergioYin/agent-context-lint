@@ -63,6 +63,10 @@ ACTION_HEADINGS = re.compile(r"^#{1,3}\s*(build|test|lint|run|commands?|workflow
 COMMAND_HINT = re.compile(r"`{1,3}\s*(npm|pnpm|yarn|python|pytest|uv|pip|go test|cargo|make|docker|gh|git)\b", re.I)
 VERIFICATION_HEADING = re.compile(r"^#{1,6}\s*(handoff\s*/\s*)?verification\b", re.I | re.M)
 PLACEHOLDER_ONLY = re.compile(r"^(?:[-*+]\s*)?(?:TODO|TBD|FIXME|replace me)\.?:?$", re.I)
+COMMAND_SNIPPET = re.compile(r"`{1,3}([^`\n]+)`{1,3}")
+COMMAND_START = re.compile(r"^(?:python|pytest|unittest|npm|pnpm|yarn|uv|make|cargo|go|docker)\b")
+VALIDATION_COMMAND = re.compile(r"\b(test|pytest|unittest|lint|ruff|flake8|mypy|build|serve|start|dev|run)\b", re.I)
+MAX_COMMAND_DRIFT_FINDINGS = 3
 
 @dataclass
 class Finding:
@@ -79,6 +83,12 @@ class FileScore:
     approx_tokens: int
     score: int
     findings: list[Finding]
+
+@dataclass
+class RepoContext:
+    readme_text: str
+    supported_commands: set[str]
+    has_command_sources: bool
 
 
 def discover(root: Path, patterns: Iterable[str]) -> list[Path]:
@@ -100,11 +110,149 @@ def git_tracked(root: Path) -> set[str]:
     return {line.strip() for line in out.splitlines() if line.strip()}
 
 
-def lint_file(path: Path, root: Path, tracked: set[str], max_bytes: int) -> FileScore:
+def normalize_command(command: str) -> str:
+    return " ".join(command.strip().split())
+
+
+def command_in_readme(command: str, readme_text: str) -> bool:
+    if not readme_text:
+        return False
+    return normalize_command(command).lower() in normalize_command(readme_text).lower()
+
+
+def package_json_scripts(root: Path) -> dict[str, str]:
+    path = root / "package.json"
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    scripts = data.get("scripts")
+    if not isinstance(scripts, dict):
+        return {}
+    return {str(name): str(command) for name, command in scripts.items()}
+
+
+def pyproject_script_names(root: Path) -> set[str]:
+    path = root / "pyproject.toml"
+    if not path.is_file():
+        return set()
+
+    names: set[str] = set()
+    in_project_scripts = False
+    assignment = re.compile(r"^([A-Za-z0-9_.-]+)\s*=")
+
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            in_project_scripts = line == "[project.scripts]"
+            continue
+        if in_project_scripts:
+            match = assignment.match(line)
+            if match:
+                names.add(match.group(1).strip('"\''))
+
+    return names
+
+
+def known_python_modules(root: Path) -> set[str]:
+    modules: set[str] = set()
+    for path in root.iterdir() if root.is_dir() else []:
+        if path.name.startswith("."):
+            continue
+        if path.is_dir() and (path / "__init__.py").is_file():
+            modules.add(path.name)
+        elif path.is_file() and path.suffix == ".py":
+            modules.add(path.stem)
+    scripts = root / "scripts"
+    if scripts.is_dir():
+        for script in scripts.glob("*.py"):
+            modules.add(f"scripts/{script.name}")
+            modules.add(script.stem)
+    return modules
+
+
+def load_repo_context(root: Path) -> RepoContext:
+    readme = root / "README.md"
+    readme_text = readme.read_text(encoding="utf-8", errors="replace") if readme.is_file() else ""
+    supported: set[str] = set()
+
+    for name, command in package_json_scripts(root).items():
+        supported.update({
+            command,
+            f"npm run {name}",
+            f"pnpm run {name}",
+            f"pnpm {name}",
+            f"yarn {name}",
+        })
+        if name in {"test", "start"}:
+            supported.update({f"npm {name}", f"pnpm {name}", f"yarn {name}"})
+
+    for name in pyproject_script_names(root):
+        supported.add(name)
+
+    for name in known_python_modules(root):
+        supported.add(f"python -m {name}")
+        supported.add(f"python {name}")
+
+    return RepoContext(readme_text, supported, bool(readme_text or supported))
+
+
+def is_supported_command(command: str, context: RepoContext) -> bool:
+    normalized = normalize_command(command).lower()
+    if command_in_readme(command, context.readme_text):
+        return True
+    for supported in context.supported_commands:
+        supported_normalized = normalize_command(supported).lower()
+        if normalized == supported_normalized or normalized.startswith(supported_normalized + " "):
+            return True
+    return False
+
+
+def likely_validation_commands(text: str) -> list[tuple[str, int]]:
+    commands: list[tuple[str, int]] = []
+    seen: set[str] = set()
+    for match in COMMAND_SNIPPET.finditer(text):
+        command = normalize_command(match.group(1))
+        if not COMMAND_START.search(command) or not VALIDATION_COMMAND.search(command):
+            continue
+        lowered = command.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        commands.append((command, match.start(1)))
+    return commands
+
+
+def lint_command_drift(text: str, rel: str, context: RepoContext) -> list[Finding]:
+    if not context.has_command_sources:
+        return []
+
+    findings: list[Finding] = []
+    for command, start in likely_validation_commands(text):
+        if is_supported_command(command, context):
+            continue
+        findings.append(Finding(
+            "warn",
+            rel,
+            "command_drift",
+            f"Command `{command}` is not documented in README.md and is not supported by package metadata scripts.",
+            line_for(text, start),
+        ))
+        if len(findings) >= MAX_COMMAND_DRIFT_FINDINGS:
+            break
+    return findings
+
+
+def lint_file(path: Path, root: Path, tracked: set[str], max_bytes: int, context: RepoContext | None = None) -> FileScore:
     rel = path.relative_to(root).as_posix()
     text = path.read_text(encoding="utf-8", errors="replace")
     findings: list[Finding] = []
     size = len(text.encode("utf-8"))
+    context = context or load_repo_context(root)
 
     if size == 0:
         findings.append(Finding("error", rel, "empty", "Context file is empty; agents will skip or learn nothing."))
@@ -124,6 +272,8 @@ def lint_file(path: Path, root: Path, tracked: set[str], max_bytes: int) -> File
     TODO_RE = re.compile(r"\b(TODO|TBD|fixme|later)\b", re.I)
     for m in TODO_RE.finditer(text):
         findings.append(Finding("info", rel, "placeholder", "Placeholder language can reduce agent reliability.", line_for(text, m.start())))
+
+    findings.extend(lint_command_drift(text, rel, context))
 
     score = 100
     for f in findings:
@@ -340,7 +490,8 @@ def main(argv: list[str] | None = None) -> int:
     patterns = DEFAULT_FILES + (args.pattern or [])
     files = discover(root, patterns)
     tracked = git_tracked(root)
-    scores = [lint_file(p, root, tracked, args.max_bytes) for p in files]
+    context = load_repo_context(root)
+    scores = [lint_file(p, root, tracked, args.max_bytes, context) for p in files]
     exit_code = 1 if any(f.level == "error" for s in scores for f in s.findings) else 0
     output_format = "json" if args.json else args.format
 
