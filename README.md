@@ -62,6 +62,13 @@ JSON output for CI/local automation:
 python -m agent_context_lint /path/to/repo --format json
 ```
 
+Include non-mutating suggestions for supported findings:
+
+```bash
+python -m agent_context_lint /path/to/repo --suggest-fixes
+python -m agent_context_lint /path/to/repo --format json --suggest-fixes
+```
+
 Scan additional custom files:
 
 ```bash
@@ -105,6 +112,8 @@ python scripts/selfcheck.py
 
 Instruction files that mention likely validation commands such as test, lint, build, run, start, or serve commands are checked against `README.md` and common metadata scripts. Commands are treated as supported when they appear in README examples, match `package.json` scripts such as `npm run lint`, match `[project.scripts]` entries in `pyproject.toml`, or target known local Python modules/scripts.
 
+Pass `--suggest-fixes` to include concise, non-mutating recommendations for command drift findings. Suggestions point to the likely maintenance action: document the command in `README.md`, add package metadata script support, or update the instruction file to use an already documented validation command.
+
 ## Example
 
 ```bash
@@ -139,7 +148,7 @@ For machine-readable output:
 python -m agent_context_lint . --format json
 ```
 
-The JSON report includes `scanned_files`, per-file `issues`, a flattened top-level `issues` list, `summary` counts, and the `exit_code` the command returns. Each issue includes `severity`, `message`, `path`, and `line` when a source line is available. The older `--json` flag remains available as an alias for `--format json`.
+The JSON report includes `scanned_files`, per-file `issues`, a flattened top-level `issues` list, `summary` counts, and the `exit_code` the command returns. Each issue includes `severity`, `message`, `path`, and `line` when a source line is available. With `--suggest-fixes`, supported findings also include `suggestion`. The older `--json` flag remains available as an alias for `--format json`.
 
 ## Project layout
 

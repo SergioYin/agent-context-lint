@@ -75,6 +75,7 @@ class Finding:
     code: str
     message: str
     line: int | None = None
+    suggestion: str | None = None
 
 @dataclass
 class FileScore:
@@ -241,6 +242,10 @@ def lint_command_drift(text: str, rel: str, context: RepoContext) -> list[Findin
             "command_drift",
             f"Command `{command}` is not documented in README.md and is not supported by package metadata scripts.",
             line_for(text, start),
+            (
+                f"Document `{command}` in README.md, add a package metadata script for it, "
+                f"or update {rel} to use an existing documented validation command."
+            ),
         ))
         if len(findings) >= MAX_COMMAND_DRIFT_FINDINGS:
             break
@@ -282,7 +287,7 @@ def lint_file(path: Path, root: Path, tracked: set[str], max_bytes: int, context
     return FileScore(rel, size, max(1, size // 4), score, findings)
 
 
-def render_markdown(scores: list[FileScore], root: Path) -> str:
+def render_markdown(scores: list[FileScore], root: Path, suggest_fixes: bool = False) -> str:
     total_findings = sum(len(s.findings) for s in scores)
     avg = round(sum(s.score for s in scores) / len(scores), 1) if scores else 0
     lines = [
@@ -312,6 +317,8 @@ def render_markdown(scores: list[FileScore], root: Path) -> str:
                 where = f":{f.line}" if f.line else ""
                 icon = {"error": "❌", "warn": "⚠️", "info": "ℹ️"}.get(f.level, "-")
                 lines.append(f"- {icon} `{f.code}`{where}: {f.message}")
+                if suggest_fixes and f.suggestion:
+                    lines.append(f"  - Suggestion: {f.suggestion}")
 
     lines += [
         "",
@@ -339,7 +346,7 @@ def render_markdown(scores: list[FileScore], root: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
-def issue_to_dict(finding: Finding) -> dict[str, object]:
+def issue_to_dict(finding: Finding, suggest_fixes: bool = False) -> dict[str, object]:
     issue: dict[str, object] = {
         "severity": finding.level,
         "code": finding.code,
@@ -348,11 +355,13 @@ def issue_to_dict(finding: Finding) -> dict[str, object]:
     }
     if finding.line is not None:
         issue["line"] = finding.line
+    if suggest_fixes and finding.suggestion:
+        issue["suggestion"] = finding.suggestion
     return issue
 
 
-def json_report(scores: list[FileScore], root: Path, exit_code: int) -> dict[str, object]:
-    issues = [issue_to_dict(f) for s in scores for f in s.findings]
+def json_report(scores: list[FileScore], root: Path, exit_code: int, suggest_fixes: bool = False) -> dict[str, object]:
+    issues = [issue_to_dict(f, suggest_fixes) for s in scores for f in s.findings]
     counts = {
         "error": sum(1 for issue in issues if issue["severity"] == "error"),
         "warn": sum(1 for issue in issues if issue["severity"] == "warn"),
@@ -365,7 +374,7 @@ def json_report(scores: list[FileScore], root: Path, exit_code: int) -> dict[str
             "bytes": s.bytes,
             "approx_tokens": s.approx_tokens,
             "score": s.score,
-            "issues": [issue_to_dict(f) for f in s.findings],
+            "issues": [issue_to_dict(f, suggest_fixes) for f in s.findings],
         }
         for s in scores
     ]
@@ -482,6 +491,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("path", nargs="?", default=".", help="Repository/project path to scan")
     parser.add_argument("--format", choices=("text", "json"), default="text", help="Output format")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON (alias for --format json)")
+    parser.add_argument("--suggest-fixes", action="store_true", help="Include non-mutating fix suggestions for supported findings")
     parser.add_argument("--max-bytes", type=int, default=32000, help="Warn when a context file exceeds this byte budget")
     parser.add_argument("--pattern", action="append", help="Additional glob pattern to scan")
     args = parser.parse_args(argv)
@@ -496,9 +506,9 @@ def main(argv: list[str] | None = None) -> int:
     output_format = "json" if args.json else args.format
 
     if output_format == "json":
-        print(json.dumps(json_report(scores, root, exit_code), indent=2))
+        print(json.dumps(json_report(scores, root, exit_code, args.suggest_fixes), indent=2))
     else:
-        print(render_markdown(scores, root))
+        print(render_markdown(scores, root, args.suggest_fixes))
 
     return exit_code
 

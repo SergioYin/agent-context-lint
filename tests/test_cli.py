@@ -13,10 +13,10 @@ def write_secret_fixture(path: Path) -> None:
     path.write_text(f"# Build\nRun `pytest`.\nTOKEN={fake_token}\n", encoding="utf-8")
 
 
-def run_json_scan(path: Path) -> tuple[int, dict[str, object]]:
+def run_json_scan(path: Path, *extra_args: str) -> tuple[int, dict[str, object]]:
     output = StringIO()
     with redirect_stdout(output):
-        code = main([str(path), "--format", "json"])
+        code = main([str(path), "--format", "json", *extra_args])
     return code, json.loads(output.getvalue())
 
 
@@ -55,6 +55,61 @@ class CommandDriftTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(len(drift), 1)
             self.assertIn("npm run lint", drift[0]["message"])
+
+    def test_json_suggest_fixes_includes_command_drift_suggestion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "README.md").write_text("Run checks with `python -m pytest -q`.\n", encoding="utf-8")
+            (root / "AGENTS.md").write_text("# Lint\nRun `npm run lint` before handoff.\n", encoding="utf-8")
+
+            code, data = run_json_scan(root, "--suggest-fixes")
+            drift = [issue for issue in data["issues"] if issue["code"] == "command_drift"]
+
+            self.assertEqual(code, 0)
+            self.assertEqual(len(drift), 1)
+            self.assertIn("suggestion", drift[0])
+            self.assertIn("README.md", drift[0]["suggestion"])
+            self.assertIn("package metadata script", drift[0]["suggestion"])
+
+    def test_default_json_does_not_include_suggestions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "README.md").write_text("Run checks with `python -m pytest -q`.\n", encoding="utf-8")
+            (root / "AGENTS.md").write_text("# Lint\nRun `npm run lint` before handoff.\n", encoding="utf-8")
+
+            code, data = run_json_scan(root)
+            drift = [issue for issue in data["issues"] if issue["code"] == "command_drift"]
+
+            self.assertEqual(code, 0)
+            self.assertEqual(len(drift), 1)
+            self.assertNotIn("suggestion", drift[0])
+
+    def test_text_suggest_fixes_renders_command_drift_suggestion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "README.md").write_text("Run checks with `python -m pytest -q`.\n", encoding="utf-8")
+            (root / "AGENTS.md").write_text("# Lint\nRun `npm run lint` before handoff.\n", encoding="utf-8")
+            output = StringIO()
+
+            with redirect_stdout(output):
+                code = main([str(root), "--suggest-fixes"])
+
+            self.assertEqual(code, 0)
+            self.assertIn("Suggestion: Document `npm run lint` in README.md", output.getvalue())
+
+    def test_default_text_does_not_render_suggestions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "README.md").write_text("Run checks with `python -m pytest -q`.\n", encoding="utf-8")
+            (root / "AGENTS.md").write_text("# Lint\nRun `npm run lint` before handoff.\n", encoding="utf-8")
+            output = StringIO()
+
+            with redirect_stdout(output):
+                code = main([str(root)])
+
+            self.assertEqual(code, 0)
+            self.assertIn("command_drift", output.getvalue())
+            self.assertNotIn("Suggestion:", output.getvalue())
 
 
 def test_markdown_scan_warns_for_missing_commands(capsys):

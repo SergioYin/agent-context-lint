@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.4 - 2026-05
+
+- Added `--suggest-fixes` to include non-mutating fix suggestions in text and JSON reports.
+- Added command-drift suggestions that point maintainers toward updating README examples, package metadata scripts, or agent instruction files.
+- Kept default text and JSON output unchanged unless suggestions are explicitly requested.
+
 ## v0.2.3 - 2026-05
 
 - Added `command_drift` warnings for likely validation commands in AI-agent instruction files that are not documented in README.md or supported by package metadata.
