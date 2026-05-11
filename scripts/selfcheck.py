@@ -31,6 +31,8 @@ def main() -> int:
         output = run([sys.executable, "-m", "agent_context_lint", str(root), "--format", "json"])
         data = json.loads(output)
         assert any(issue["code"] == "command_drift" for issue in data["issues"])
+        assert any(item["source"] == "pyproject.toml" for item in data["metadata"])
+        assert any(item["source"] == "commands" and item["values"] == sorted(item["values"]) for item in data["metadata"])
 
     print("selfcheck ok")
     return 0

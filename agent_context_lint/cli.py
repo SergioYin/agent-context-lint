@@ -9,6 +9,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10
+    tomllib = None
+
 AGENTS_SKELETON = """# Agent Instructions
 
 ## Project Overview
@@ -90,6 +95,14 @@ class RepoContext:
     readme_text: str
     supported_commands: set[str]
     has_command_sources: bool
+    metadata_diagnostics: list["MetadataDiagnostic"]
+
+@dataclass
+class MetadataDiagnostic:
+    source: str
+    status: str
+    detail: str
+    values: list[str]
 
 
 def discover(root: Path, patterns: Iterable[str]) -> list[Path]:
@@ -121,67 +134,114 @@ def command_in_readme(command: str, readme_text: str) -> bool:
     return normalize_command(command).lower() in normalize_command(readme_text).lower()
 
 
-def package_json_scripts(root: Path) -> dict[str, str]:
+def metadata_diagnostic(source: str, status: str, detail: str, values: Iterable[str] = ()) -> MetadataDiagnostic:
+    return MetadataDiagnostic(source, status, detail, sorted({str(value) for value in values}))
+
+
+def package_json_scripts(root: Path) -> tuple[dict[str, str], MetadataDiagnostic]:
     path = root / "package.json"
     if not path.is_file():
-        return {}
+        return {}, metadata_diagnostic("package.json", "missing", "No package.json found.")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        return {}
+        return {}, metadata_diagnostic("package.json", "unreadable", "package.json could not be parsed as JSON.")
     scripts = data.get("scripts")
     if not isinstance(scripts, dict):
-        return {}
-    return {str(name): str(command) for name, command in scripts.items()}
+        return {}, metadata_diagnostic("package.json", "no_scripts", "package.json does not define a scripts object.")
+    parsed = {str(name): str(command) for name, command in scripts.items()}
+    return parsed, metadata_diagnostic("package.json", "loaded", f"Found {len(parsed)} npm script(s).", parsed)
 
 
-def pyproject_script_names(root: Path) -> set[str]:
-    path = root / "pyproject.toml"
-    if not path.is_file():
-        return set()
-
+def fallback_pyproject_script_names(text: str) -> set[str]:
     names: set[str] = set()
     in_project_scripts = False
-    assignment = re.compile(r"^([A-Za-z0-9_.-]+)\s*=")
+    assignment = re.compile(r"^(?:['\"]([^'\"]+)['\"]|([A-Za-z0-9_.-]+))\s*=")
 
-    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
         if line.startswith("[") and line.endswith("]"):
-            in_project_scripts = line == "[project.scripts]"
+            in_project_scripts = line in {"[project.scripts]", "[project.gui-scripts]"}
             continue
         if in_project_scripts:
             match = assignment.match(line)
             if match:
-                names.add(match.group(1).strip('"\''))
+                names.add((match.group(1) or match.group(2)).strip())
 
     return names
 
 
-def known_python_modules(root: Path) -> set[str]:
+def pyproject_script_names(root: Path) -> tuple[set[str], MetadataDiagnostic]:
+    path = root / "pyproject.toml"
+    if not path.is_file():
+        return set(), metadata_diagnostic("pyproject.toml", "missing", "No pyproject.toml found.")
+
+    if tomllib is not None:
+        try:
+            data = tomllib.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            names = fallback_pyproject_script_names(text)
+            return names, metadata_diagnostic(
+                "pyproject.toml",
+                "fallback",
+                f"tomllib could not parse pyproject.toml; used conservative fallback ({exc.__class__.__name__}).",
+                names,
+            )
+        project = data.get("project", {})
+        scripts = project.get("scripts", {}) if isinstance(project, dict) else {}
+        gui_scripts = project.get("gui-scripts", {}) if isinstance(project, dict) else {}
+        names = set()
+        if isinstance(scripts, dict):
+            names.update(str(name) for name in scripts)
+        if isinstance(gui_scripts, dict):
+            names.update(str(name) for name in gui_scripts)
+        return names, metadata_diagnostic("pyproject.toml", "loaded_tomllib", f"Found {len(names)} project script(s) with tomllib.", names)
+
+    text = path.read_text(encoding="utf-8", errors="replace")
+    names = fallback_pyproject_script_names(text)
+    return names, metadata_diagnostic("pyproject.toml", "loaded_fallback", f"Found {len(names)} project script(s) with fallback parser.", names)
+
+
+def known_python_modules(root: Path) -> tuple[set[str], MetadataDiagnostic]:
     modules: set[str] = set()
-    for path in root.iterdir() if root.is_dir() else []:
-        if path.name.startswith("."):
-            continue
-        if path.is_dir() and (path / "__init__.py").is_file():
-            modules.add(path.name)
-        elif path.is_file() and path.suffix == ".py":
-            modules.add(path.stem)
+    search_roots = [root]
+    src = root / "src"
+    if src.is_dir():
+        search_roots.append(src)
+    for search_root in search_roots:
+        for path in search_root.iterdir() if search_root.is_dir() else []:
+            if path.name.startswith("."):
+                continue
+            if path.is_dir() and (path / "__init__.py").is_file():
+                modules.add(path.name)
+            elif search_root == root and path.is_file() and path.suffix == ".py":
+                modules.add(path.stem)
     scripts = root / "scripts"
     if scripts.is_dir():
         for script in scripts.glob("*.py"):
             modules.add(f"scripts/{script.name}")
             modules.add(script.stem)
-    return modules
+    return modules, metadata_diagnostic("python", "loaded", f"Found {len(modules)} local Python module/script target(s).", modules)
 
 
 def load_repo_context(root: Path) -> RepoContext:
     readme = root / "README.md"
     readme_text = readme.read_text(encoding="utf-8", errors="replace") if readme.is_file() else ""
     supported: set[str] = set()
+    diagnostics = [
+        metadata_diagnostic(
+            "README.md",
+            "loaded" if readme_text else "missing",
+            "README.md is available for command matching." if readme_text else "No README.md found.",
+        )
+    ]
 
-    for name, command in package_json_scripts(root).items():
+    package_scripts, package_diagnostic = package_json_scripts(root)
+    diagnostics.append(package_diagnostic)
+    for name, command in package_scripts.items():
         supported.update({
             command,
             f"npm run {name}",
@@ -192,14 +252,19 @@ def load_repo_context(root: Path) -> RepoContext:
         if name in {"test", "start"}:
             supported.update({f"npm {name}", f"pnpm {name}", f"yarn {name}"})
 
-    for name in pyproject_script_names(root):
+    pyproject_scripts, pyproject_diagnostic = pyproject_script_names(root)
+    diagnostics.append(pyproject_diagnostic)
+    for name in pyproject_scripts:
         supported.add(name)
 
-    for name in known_python_modules(root):
+    python_modules, python_diagnostic = known_python_modules(root)
+    diagnostics.append(python_diagnostic)
+    for name in python_modules:
         supported.add(f"python -m {name}")
         supported.add(f"python {name}")
 
-    return RepoContext(readme_text, supported, bool(readme_text or supported))
+    diagnostics.append(metadata_diagnostic("commands", "loaded", f"Derived {len(supported)} supported command pattern(s).", supported))
+    return RepoContext(readme_text, supported, bool(readme_text or supported), diagnostics)
 
 
 def is_supported_command(command: str, context: RepoContext) -> bool:
@@ -287,7 +352,7 @@ def lint_file(path: Path, root: Path, tracked: set[str], max_bytes: int, context
     return FileScore(rel, size, max(1, size // 4), score, findings)
 
 
-def render_markdown(scores: list[FileScore], root: Path, suggest_fixes: bool = False) -> str:
+def render_markdown(scores: list[FileScore], root: Path, context: RepoContext, suggest_fixes: bool = False) -> str:
     total_findings = sum(len(s.findings) for s in scores)
     avg = round(sum(s.score for s in scores) / len(scores), 1) if scores else 0
     lines = [
@@ -305,6 +370,11 @@ def render_markdown(scores: list[FileScore], root: Path, suggest_fixes: bool = F
             "",
             "Create an `AGENTS.md` with build, test, style, constraints, and verification instructions.",
         ]
+        lines += ["", "## Metadata Diagnostics"]
+        for diagnostic in context.metadata_diagnostics:
+            lines.append(f"- `{diagnostic.source}`: {diagnostic.status} - {diagnostic.detail}")
+            if diagnostic.values:
+                lines.append(f"  - Values: {', '.join(diagnostic.values)}")
         return "\n".join(lines) + "\n"
 
     lines.append("## Files")
@@ -319,6 +389,12 @@ def render_markdown(scores: list[FileScore], root: Path, suggest_fixes: bool = F
                 lines.append(f"- {icon} `{f.code}`{where}: {f.message}")
                 if suggest_fixes and f.suggestion:
                     lines.append(f"  - Suggestion: {f.suggestion}")
+
+    lines += ["", "## Metadata Diagnostics"]
+    for diagnostic in context.metadata_diagnostics:
+        lines.append(f"- `{diagnostic.source}`: {diagnostic.status} - {diagnostic.detail}")
+        if diagnostic.values:
+            lines.append(f"  - Values: {', '.join(diagnostic.values)}")
 
     lines += [
         "",
@@ -360,7 +436,16 @@ def issue_to_dict(finding: Finding, suggest_fixes: bool = False) -> dict[str, ob
     return issue
 
 
-def json_report(scores: list[FileScore], root: Path, exit_code: int, suggest_fixes: bool = False) -> dict[str, object]:
+def metadata_to_dict(diagnostic: MetadataDiagnostic) -> dict[str, object]:
+    return {
+        "source": diagnostic.source,
+        "status": diagnostic.status,
+        "detail": diagnostic.detail,
+        "values": diagnostic.values,
+    }
+
+
+def json_report(scores: list[FileScore], root: Path, context: RepoContext, exit_code: int, suggest_fixes: bool = False) -> dict[str, object]:
     issues = [issue_to_dict(f, suggest_fixes) for s in scores for f in s.findings]
     counts = {
         "error": sum(1 for issue in issues if issue["severity"] == "error"),
@@ -383,6 +468,7 @@ def json_report(scores: list[FileScore], root: Path, exit_code: int, suggest_fix
         "scanned_files": [s.file for s in scores],
         "files": files,
         "issues": issues,
+        "metadata": [metadata_to_dict(diagnostic) for diagnostic in context.metadata_diagnostics],
         "summary": {
             "files_scanned": len(scores),
             "issues": len(issues),
@@ -506,9 +592,9 @@ def main(argv: list[str] | None = None) -> int:
     output_format = "json" if args.json else args.format
 
     if output_format == "json":
-        print(json.dumps(json_report(scores, root, exit_code, args.suggest_fixes), indent=2))
+        print(json.dumps(json_report(scores, root, context, exit_code, args.suggest_fixes), indent=2))
     else:
-        print(render_markdown(scores, root, args.suggest_fixes))
+        print(render_markdown(scores, root, context, args.suggest_fixes))
 
     return exit_code
 

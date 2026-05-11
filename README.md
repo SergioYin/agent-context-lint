@@ -1,6 +1,6 @@
 # Agent Context Lint
 
-![Python](https://img.shields.io/badge/python-3.9%2B-blue)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 
 **Lint AGENTS.md, CLAUDE.md, Cursor rules, and Copilot instructions before they mislead your coding agent.**
@@ -26,6 +26,7 @@ AI coding tools increasingly depend on repository-level instruction/context file
   - missing concrete shell commands
   - files likely to exceed context byte budgets
   - instruction-file validation commands that drift from README/package metadata
+  - package metadata parsing status for README, `package.json`, `pyproject.toml`, and local Python targets
   - possible hard-coded secrets/tokens
   - TODO/TBD placeholders
   - untracked context files in git repos
@@ -110,7 +111,9 @@ python -m pytest -q
 python scripts/selfcheck.py
 ```
 
-Instruction files that mention likely validation commands such as test, lint, build, run, start, or serve commands are checked against `README.md` and common metadata scripts. Commands are treated as supported when they appear in README examples, match `package.json` scripts such as `npm run lint`, match `[project.scripts]` entries in `pyproject.toml`, or target known local Python modules/scripts.
+Instruction files that mention likely validation commands such as test, lint, build, run, start, or serve commands are checked against `README.md` and common metadata scripts. Commands are treated as supported when they appear in README examples, match `package.json` scripts such as `npm run lint`, match `[project.scripts]` or `[project.gui-scripts]` entries in `pyproject.toml`, or target known local Python modules/scripts.
+
+`pyproject.toml` parsing uses stdlib `tomllib` on Python versions that provide it. On older interpreters, or when TOML cannot be parsed, the linter falls back to a conservative parser for project script tables so command-drift checks remain dependency-free.
 
 Pass `--suggest-fixes` to include concise, non-mutating recommendations for command drift findings. Suggestions point to the likely maintenance action: document the command in `README.md`, add package metadata script support, or update the instruction file to use an already documented validation command.
 
@@ -131,6 +134,19 @@ Average score: **45.0/100**
 - ⚠️ `missing_commands`: No concrete shell commands detected...
 - ⚠️ `command_drift`: Command `npm run lint` is not documented in README.md...
 - ℹ️ `placeholder`: Placeholder language can reduce agent reliability.
+
+## Metadata Diagnostics
+- `README.md`: missing - No README.md found.
+- `package.json`: missing - No package.json found.
+- `pyproject.toml`: missing - No pyproject.toml found.
+```
+
+Additional example fixtures show common repo shapes:
+
+```bash
+python -m agent_context_lint examples/python-repo --format json
+python -m agent_context_lint examples/node-repo
+python -m agent_context_lint examples/docs-only-repo
 ```
 
 ## CI usage
@@ -148,13 +164,16 @@ For machine-readable output:
 python -m agent_context_lint . --format json
 ```
 
-The JSON report includes `scanned_files`, per-file `issues`, a flattened top-level `issues` list, `summary` counts, and the `exit_code` the command returns. Each issue includes `severity`, `message`, `path`, and `line` when a source line is available. With `--suggest-fixes`, supported findings also include `suggestion`. The older `--json` flag remains available as an alias for `--format json`.
+The JSON report includes `scanned_files`, per-file `issues`, a flattened top-level `issues` list, deterministic `metadata` diagnostics, `summary` counts, and the `exit_code` the command returns. Each issue includes `severity`, `message`, `path`, and `line` when a source line is available. With `--suggest-fixes`, supported findings also include `suggestion`. The older `--json` flag remains available as an alias for `--format json`.
 
 ## Project layout
 
 ```text
 agent_context_lint/   # CLI implementation
 examples/demo-repo/   # intentionally imperfect demo context file
+examples/python-repo/ # Python package metadata example
+examples/node-repo/   # Node package scripts example
+examples/docs-only-repo/ # docs-only command example
 tests/                # pytest tests
 ```
 
@@ -163,6 +182,5 @@ tests/                # pytest tests
 MIT
 ## Roadmap
 
-- GitHub Action packaging for one-line CI adoption.
 - More ecosystem-specific command detection.
-- Richer examples from real-world Python, Node, and docs-only repositories.
+- Additional metadata diagnostics for more ecosystems.

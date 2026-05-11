@@ -5,6 +5,7 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 
+from agent_context_lint import cli
 from agent_context_lint.cli import main
 
 
@@ -110,6 +111,92 @@ class CommandDriftTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("command_drift", output.getvalue())
             self.assertNotIn("Suggestion:", output.getvalue())
+
+
+class MetadataDiagnosticsTests(unittest.TestCase):
+    def test_tomllib_pyproject_scripts_support_dotted_and_quoted_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pyproject.toml").write_text(
+                "[project.scripts]\n"
+                '"lint.check" = "pkg.cli:main"\n'
+                "\n[project.gui-scripts]\n"
+                "agent-gui = \"pkg.gui:main\"\n",
+                encoding="utf-8",
+            )
+
+            context = cli.load_repo_context(root)
+            pyproject = [item for item in context.metadata_diagnostics if item.source == "pyproject.toml"][0]
+
+            self.assertIn("lint.check", context.supported_commands)
+            self.assertIn("agent-gui", context.supported_commands)
+            self.assertEqual(pyproject.values, ["agent-gui", "lint.check"])
+            self.assertIn(pyproject.status, {"loaded_tomllib", "loaded_fallback"})
+
+    def test_pyproject_fallback_parser_is_deterministic_without_tomllib(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pyproject.toml").write_text(
+                "[project.scripts]\n"
+                "zeta = \"pkg.cli:z\"\n"
+                '"alpha.beta" = "pkg.cli:a"\n',
+                encoding="utf-8",
+            )
+            original_tomllib = cli.tomllib
+            cli.tomllib = None
+            try:
+                context = cli.load_repo_context(root)
+            finally:
+                cli.tomllib = original_tomllib
+
+            pyproject = [item for item in context.metadata_diagnostics if item.source == "pyproject.toml"][0]
+            commands = [item for item in context.metadata_diagnostics if item.source == "commands"][0]
+
+            self.assertEqual(pyproject.status, "loaded_fallback")
+            self.assertEqual(pyproject.values, ["alpha.beta", "zeta"])
+            self.assertEqual(commands.values, sorted(commands.values))
+
+    def test_json_report_includes_metadata_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "README.md").write_text("Run checks with `npm test`.\n", encoding="utf-8")
+            (root / "package.json").write_text('{"scripts": {"test": "node --test"}}\n', encoding="utf-8")
+            (root / "AGENTS.md").write_text("# Test\nRun `npm test`.\n", encoding="utf-8")
+
+            code, data = run_json_scan(root)
+            package_json = [item for item in data["metadata"] if item["source"] == "package.json"][0]
+            commands = [item for item in data["metadata"] if item["source"] == "commands"][0]
+
+            self.assertEqual(code, 0)
+            self.assertEqual(package_json["status"], "loaded")
+            self.assertEqual(package_json["values"], ["test"])
+            self.assertIn("npm test", commands["values"])
+
+    def test_src_layout_python_package_is_supported_command_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = root / "src" / "demo_pkg"
+            package.mkdir(parents=True)
+            (package / "__init__.py").write_text("", encoding="utf-8")
+
+            context = cli.load_repo_context(root)
+            python = [item for item in context.metadata_diagnostics if item.source == "python"][0]
+
+            self.assertEqual(python.values, ["demo_pkg"])
+            self.assertIn("python -m demo_pkg", context.supported_commands)
+
+    def test_text_report_includes_metadata_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "AGENTS.md").write_text("# Test\nRun `python -m pytest -q`.\n", encoding="utf-8")
+            output = StringIO()
+
+            with redirect_stdout(output):
+                code = main([str(root)])
+
+            self.assertEqual(code, 0)
+            self.assertIn("## Metadata Diagnostics", output.getvalue())
+            self.assertIn("`pyproject.toml`: missing", output.getvalue())
 
 
 def test_markdown_scan_warns_for_missing_commands(capsys):

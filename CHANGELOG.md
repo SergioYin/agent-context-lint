@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.5 - 2026-05
+
+- Improved `pyproject.toml` metadata parsing with stdlib `tomllib` when available and a deterministic fallback parser otherwise.
+- Added metadata diagnostics to text and JSON reports so automation can see which README/package/TOML/Python signals were used.
+- Added richer Python, Node, and docs-only example repositories.
+- Expanded selfcheck and tests for metadata parsing, fallback behavior, and report diagnostics.
+
 ## v0.2.4 - 2026-05
 
 - Added `--suggest-fixes` to include non-mutating fix suggestions in text and JSON reports.

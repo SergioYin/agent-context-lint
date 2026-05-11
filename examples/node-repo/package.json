@@ -1,0 +1,9 @@
+{
+  "name": "agent-context-lint-node-example",
+  "private": true,
+  "scripts": {
+    "test": "node --test",
+    "lint": "node --check index.js",
+    "docs:check": "node scripts/check-docs.js"
+  }
+}
